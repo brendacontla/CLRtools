@@ -1,0 +1,239 @@
+---
+title: "Logistic_Regression"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Logistic_Regression}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.width = 7, 
+  fig.height = 4
+)
+```
+
+```{r setup}
+library(CLRtools)
+library(dplyr)
+```
+
+
+The `CLRtools` package provides a set of functions to support the structured development of logistic regression models using the Purposeful Selection Method described by Hosmer, Lemeshow, and Sturdivant in *Applied Logistic Regression* (2013). This method offers a step-by-step approach to building multivariable logistic regression models through seven steps to identify variables that have a meaningful effect on the outcome while excluding variables that do not contribute useful information.
+
+This vignette demonstrates the complete modelling process using the **GLOW500** dataset, a study that examines risk factors for fracture in women over 50. The dataset includes variables such as age at enrollment, body mass index (BMI), smoking status, prior fracture history, among others. Each modelling step is supported by corresponding functions from the `CLRtools` package.
+
+We now proceed through the seven steps of the Purposeful Selection Method, applying each one to the GLOW500 dataset with the support of `CLRtools` functions.
+
+### Step 1. Fit univariable models
+
+The first step of the Purposeful Selection Method involves fitting separate univariable logistic regression models, one for each candidate predictor variable. The `univariable.models()` function is used to fit each univariable model and generate a summary table. The output includes odds ratios (optional), confidence intervals, p-values, and the G statistic, which represents the likelihood ratio test comparing each univariable model to the intercept-only model. The resulting table corresponds to Table 4.1 in Chapter 4 of the book, and serves in selecting candidate variables for the multivariable model.
+
+We retain variables with a p-value less than 0.25 as initial candidates for inclusion in the next modelling step. Based on this criterion, the variables selected for the first multivariable model are: `age`, `height`, `priorfrac`, `momfrac`, `armassist`, and `raterisk`.
+
+```{r}
+# Predictor variables to evaluate
+var_to_test <- c('age','weight','height', 'bmi', 'priorfrac', 'premeno', 'momfrac', 'armassist','smoke', 'raterisk')
+
+# Define OR scaling factors (used to interpret ORs per meaningful unit)
+OR_values <- c(5, 5, 10, 5, 1, 1, 1, 1, 1, 1, 1)
+
+# Generate the univariable models table
+univariable.models(glow500, yval = 'fracture',xval = var_to_test, OR=TRUE, inc.or = OR_values)
+```
+
+### Step 2: Fit Initial multivariable Model and Refine Predictors
+
+We now fit a multivariable logistic regression model using the variables selected in Step 1. In this stage, variables that are statistically insignificant or lack clinical relevance are considered to be candidates to be removed, and assess in more depth.
+
+All variables in the model are statistically significant, except for one of the categories in the variable `raterisk`. In the book, a likelihood ratio test was used to compare the model with and without `raterisk`, yielding a p-value of 0.051 — just above the conventional significance threshold of 0.05. This variable will be considered a candidate for removal in the next steps.
+
+```{r}
+summary(glm(fracture ~ age + height + priorfrac + momfrac + armassist + raterisk, family = binomial, data = glow500))
+```
+
+### Step 3: Assess Potential Confounding 
+
+In this step, we compare the coefficient estimates of the model from the significant variables from the model in Step 2 to models that include each candidate variable for removal in the same step. This comparison helps identify potential confounding effects. For each candidate variable, we fit two models — one with and one without the variable — and assess whether any of the coefficients for the variables retained in Step 2 change substantially. The delta beta hat percentage ($\Delta \hat{\beta}\%$) is used to quantify this change. Following the approach described by Hosmer et al., (2013), a change greater than 20% in any coefficient suggests the presence of confounding and indicates that the candidate variable should be retained in the model for adjustment.
+
+The `check_coef_change()` function is used to automate this comparison and calculate the percentage change in coefficients for each added variable.
+
+```{r}
+# Variables that were not significant in Step 2 to check
+candidate.exclusion <- c( 'raterisk') 
+
+# Significant variables in Step 2
+var.preliminar <- c('age', 'height', 'priorfrac', 'momfrac','armassist') 
+
+# Check for confounding 
+check_coef_change(data = glow500, yval = 'fracture', xpre = var.preliminar, xcheck = candidate.exclusion)
+```
+
+The category "Same" in the variable `raterisk` has a p-value above the conventional significance level of 0.05. When this variable is excluded from the model, the largest percent change observed in the coefficients is around 17% for the coefficient of armassist — the same result reported in the book. As noted by the authors, this suggests that `raterisk` is not needed to adjust the effects of the remaining variables and therefore does not appear to act as a confounder.
+
+### Step 4: Reassess Excluded Variables 
+
+In this step, the variables excluded in Step 1 are added back into the model, one at a time. Some of these variables, while not significantly associated with the outcome on their own, may become statistically significant when considered alongside the variables retained in the model. The `check_coef_significant()` function is used to reintroduce each excluded variable individually and fit the corresponding model. It automates the process of generating the coefficient estimates, standard errors, and Wald test statistics (z and p-values), so the user can efficiently assess the statistical significance of each variable without manually fitting multiple models.
+
+```{r}
+# Variables excluded in Step 1 to check
+excluded<-c('weight', 'bmi', 'premeno','smoke')
+
+# Preliminary model variables (retained after Step 2 and 3)
+var.preliminar <- c('age','height', 'priorfrac', 'momfrac','armassist', 'raterisk') 
+
+check_coef_significant(data = glow500, yval = 'fracture', xpre = var.preliminar, xcheck = excluded)
+```
+
+None of the excluded variables became statistically significant when added individually to the multivariable model, and therefore they are not retained. For the variable `raterisk`, the authors considered an alternative model in which the categories "Less" and "Same" were combined. This decision was made in consultation with subject-matter experts, who agreed that the combination was reasonable. 
+
+```{r}
+# Transforming raterisk
+glow500<-glow500 %>% mutate(raterisk_cat=case_when((raterisk=='Less'| raterisk=='Same')~'C1',
+                                                   raterisk=='Greater'~'C2'))
+
+summary(glm(fracture ~ age + height + priorfrac + momfrac + armassist + raterisk_cat, family = binomial, data = glow500))
+```
+
+### Step 5: Assess Linearity of Continuous Predictors with Respect to the Logit
+
+This step checks whether the relationship between each continuous predictor and the log-odds of the outcome is approximately linear, as required by logistic regression. Approaches described in the book include LOWESS plots, quartile-based design variables, fractional polynomials, and spline functions. Since it is highly context-dependent, and several existing R packages already offer tools to perform these checks, no specific function is provided in this package. Users are encouraged to apply the most suitable method to their data.
+
+For this dataset, the continuous variables to be analyzed are `height` and `age`. After performing a linearity assessment, the authors concluded that no transformation was needed, as both variables were already approximately linear with respect to the logit. Therefore, the model remains the same from the previous step.
+
+### Step 6: Assess Interaction Terms
+
+n this step, interaction terms formed by combining the variables from the preliminary main-effects model in Step 5 are added one at a time. This allows us to evaluate whether any combinations of variables are statistically significant, which would indicate that the effect of one variable is not constant across the levels of another. Only interactions that are statistically significant in the likelihood ratio test and clinically meaningful are retained, while non-significant interactions are removed from the final model. The significance level used can be 5% or 10%, depending on the context.
+
+The `check_interactions()` function is used to automate this process by fitting models that include each candidate interaction and reporting the relevant test statistics. The output includes the log-likelihood of the model with the interaction, the likelihood ratio test comparing the main-effects model to the interaction model, and the associated p-value.
+
+```{r}
+var.maineffects<-c('age', 'height', 'priorfrac', 'momfrac', 'armassist', 'raterisk_cat')
+
+check_interactions(data = glow500, variables = var.maineffects, yval = 'fracture', rounding = 4)
+```
+
+The table above, created with the `check_interactions()` function, corresponds to Table 4.14 in Chapter 4 of Applied Logistic Regression. Three interactions were significant at the 10% level: `age*priorfrac`, `priorfrac*momfrac`, and `momfrac*armassist`. These three interactions were added to the preliminary model from Step 5 to assess their contribution. One interaction, `priorfrac*momfrac`, was not statistically significant and was therefore excluded. The remaining variables in the model were then reassessed. Only the binary variable `raterisk_cat` had a p-value above 0.05. However, the authors chose to retain this variable due to its clinical importance and the fact that its p-value was close to the 5% threshold. The final model was the following.
+
+```{r}
+final.model <- glm(fracture ~ age + height + priorfrac + momfrac + armassist + raterisk_cat + age*priorfrac + momfrac*armassist, family = binomial, data = glow500)
+summary(final.model)
+```
+
+### Step 7: Perform Model Assessment
+
+#### Measure of goodness of fit
+
+For assessing goodness of fit, the authors recommend three tests: the Hosmer–Lemeshow deciles-of-risk test, the Osius and Rojek normal approximation to the Pearson chi-square statistic, and Stukel’s test.
+
+This package provides one function for each test, implemented using the formulas and steps described in Chapter 5 of Applied Logistic Regression.
+
+**Hosmer-Lemeshow deciles-of-risk test**
+
+The `DRtest()` function performs the Hosmer–Lemeshow test and returns a table of observed and expected frequencies within each decile of risk (or group), along with the chi-squared test statistic, degrees of freedom, and corresponding p-value. The function accepts either a fitted model or a pair of vectors: one for the outcome variable and one for the predicted probabilities. The number of groups can also be specified; the default is 10.
+
+```{r}
+DRtest(final.model, g = 10)
+```
+
+The output table corresponds to Table 5.1 in Chapter 5 and suggests that the model fits the data well. The observed and expected frequencies align closely across the deciles of risk. Although two groups contain fewer than five observations, the authors note that the p-value remains sufficiently reliable to support the hypothesis that the model fits.
+
+**Osius and Rojek normal approximation to the Pearson chi-square statistic**
+
+The `osius_rojek()` function implements the 8-step procedure described in Chapter 5, including the calculation of covariate patterns to obtain the normal approximation to the Pearson chi-square statistic. Covariate patterns refer to the unique combinations of covariates in the dataset and are important to consider when assessing goodness of fit, as they can influence test performance. The package also includes a separate function, `covariate_patterns()`, to compute these patterns if needed; however, they are automatically handled within `osius_rojek()`. This function also performs the normal approximation to the distribution of the test statistic *S* (sum of squared residuals), as described in the same section of the book.
+
+```{r}
+osius_rojek(final.model)
+```
+The resulting tests have a p-value greater than 0.05, supporting the conclusion that there is no evidence that the model fits poorly.
+
+**Stukel's test**
+
+The `osius_rojek()` function implements the 4-step procedure described in Chapter 5. It tests whether the logistic regression model is correctly specified — specifically, whether the assumed S-shape of the logistic curve fits the data well. If the test is significant, it may indicate that the relationship between the predictors and the outcome is not well captured by the standard logistic model.
+```{r}
+stukels_test(final.model) 
+```
+
+In this case, the estimated coefficient for $z_1$ was large, negative, and marginally significant (Wald test p = 0.045). This result suggests that the upper tail of the observed data may be longer than what the logistic model predicts. However, because only 41 subjects in the dataset have predicted probabilities greater than 0.5, the authors chose not to modify the fitted model at this stage.
+
+#### Classification tables
+
+In addition to the formal goodness-of-fit tests described above, the authors also describe methods for evaluating the model’s classification performance and examining diagnostic plots. However, they caution that these methods should be interpreted carefully, as they depend heavily on the distribution of predicted probabilities in the sample and the choice of classification threshold. They recommend using these tools primarily when the goal is to identify a model that can effectively discriminate between the two outcome groups.
+
+The `cutpoints()` function helps assess classification accuracy by calculating sensitivity and specificity across a range of threshold values. This supports the selection of an appropriate cutoff for converting predicted probabilities into binary outcomes. The user can specify the lower and upper bounds of the threshold range, the step size, and whether to display a plot. The optional plot highlights, with a red line, the threshold that maximizes the trade-off between sensitivity and specificity. The table below corresponds to Table 5.7 in Chapter 5 of the book.
+
+```{r}
+cutpoints(final.model, cmin = 0.05, cmax = 0.75, byval = 0.05, plot = TRUE)
+```
+
+
+The `diagnosticplots_class()` function generates the four recommended diagnostic plots described in Chapter 5 to assess a model’s discrimination, i.e., its ability to distinguish between outcome groups:
+1. Scatter plot of the outcome versus the estimated probabilities from the fitted model
+2. Plot of sensitivity versus 1–specificity for all possible cutpoints
+3. Density plot of the estimated probabilities for Outcome = 0
+3. Density plot of the estimated probabilities for Outcome = 1
+
+```{r}
+diagnosticplots_class(final.model)
+```
+
+There is some overlap between the two histograms for the outcome classes. Excellent discrimination would be indicated by almost complete separation. This overlap is also visible in the jittered plot of the outcome versus the estimated probabilities. However, the ROC curve suggests that the model demonstrates acceptable discriminatory ability.
+
+#### $R^2$ measures
+
+Several options of $R^2$ are presented, depending on whether the number of covariate patterns is equal to the number of data points (J=n) or fewer (J<n). Both cases are supported in the package with the functions (`r_measures()` and `rcv_measures()`). However, the authors note that these $R^2$ measures tend to be lower than those typically observed in linear regression models, and therefore recommend focusing on overall goodness-of-fit tests for model assessment.
+
+```{r}
+# Measures assuming J = n, with J being the number of covariate patterns
+r_measures(final.model)
+```
+ 
+```{r}
+# Measures assuming J < n
+rcv_measures(final.model)
+```
+
+### Logistic regression diagnostics
+
+To complement the summary tests that assess the agreement between observed and fitted values, it is recommended to examine regression diagnostics. These involve analyzing residuals and influence measures for each covariate pattern, including:
+
+* Pearson residuals
+* Leverage values
+* Changes in estimated coefficients ($\Delta \hat{\beta_j}$)
+* Change in the Pearson chi-square statistic ($\Delta \chi_j$)
+* Change in deviance ($\Delta D_j$)
+
+These diagnostics help identify data points that are outliers, have a poor model fit, or have high influence on the estimated coefficients. They provide insight into whether specific observations are disproportionately affecting the model. All of these measures can be obtained using the `residuals_logistic()` function included in the package. This function include the 4 recommended plots for the analysis of diagnostics. 
+
+```{r}
+head(residuals_logistic(final.model)$x.cv)
+residuals_logistic(final.model)$leverage
+residuals_logistic(final.model)$change.Pearsonchi
+residuals_logistic(final.model)$change.deviance
+residuals_logistic(final.model)$cooks
+residuals_logistic(final.model)$change.Pb
+```
+
+Based on the diagnostic plots, the model appears to fit reasonably well. To explore individual outliers more closely, the dataset of residuals returned by the residuals_logistic() function can be used. Outliers can be identified by inspecting the plots and looking for values that deviate substantially from the rest of the data. The authors recommend focusing on points that are clearly separated from the general pattern. These potential outliers are filtered in the code below, and the eight covariate patterns identified by the authors in Table 5.10 are recovered, which will be further investigated.
+
+```{r}
+# Extract the residuals and other measures
+residuals.data<-residuals_logistic(final.model)$x.cv
+
+# Restore variable names for readability
+colnames(residuals.data)[c(4:7)]<-c('priorfrac','momfrac','armassist','raterisk_cat')
+
+# Flag observations with large influence or poor fit, and filter them
+residuals.data<-residuals.data%>% mutate(outliers=ifelse(delta.chi>10 | delta.deviance >4.5 | delta.beta>0.12, 1,0))
+out<-residuals.data %>% filter(outliers==1)
+
+# Select and format relevant columns for display
+out<-out[,c(2:7, 10:12, 18:19, 13, 17)]
+out[order(out[, 1], decreasing = FALSE), ]
+
+```
+
+

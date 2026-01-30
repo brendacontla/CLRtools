@@ -1,0 +1,532 @@
+---
+title: "Bayesian_Logistic_regression"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Bayesian_Logistic_regression}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.width = 7, 
+  fig.height = 4
+)
+```
+
+```{r setup, message=FALSE}
+library(CLRtools)
+library(dplyr)
+library(dagitty)
+library(ggdag)
+library(ggplot2)
+library(dplyr)
+library(rstan)
+```
+ 
+In the previous vignettes, we applied the Purposeful Selection Method to the **GLOW500** dataset to build a  parsimonious multivariable logistic regression model for fracture risk. Four variables were excluded during this process because they did not meet the statistical significance criteria at various stages of the selection steps.
+
+In this follow-up analysis, we examine onr of those excluded variables from a different perspective. Rather than focusing on statistical significance for model building, we approach the question from a causal inference angle:
+
+*Do these variables have a causal effect on fracture risk?*
+
+To answer this, we:
+
+1. Construct a **causal DAG** for fracture risk in the **GLOW500** dataset, identifying the minimal sufficient adjustment sets for each excluded variable.
+2. Use Bayesian logistic regression to estimate the posterior distributions of these effects, providing a probability-based interpretation of their potential causal roles.
+
+This approach shows how causal diagrams and Bayesian methods can give a different perspective from frequentist model selection. It also helps to check if variables dropped by statistical criteria may still be important from a causal point of view. Posterior predictive checks and effective sample size summaries assist in interpreting the results and assessing the robustness of the causal conclusions. The package `CLRtools` provides several functions for these diagnostics, which will be used in the analysis below.
+
+# Causal Diagram
+
+The **GLOW500** dataset includes several variables related to fracture risk in women over 50. Some important variables used in this analysis include:
+
+* Age, weight, and height at enrollment
+* Body Mass Index (BMI)
+* Smoking status (smoke): whether the participant currently smokes or is a former smoker
+* Prior fracture history (priorfrac): indicates if the participant had previous fractures
+* Menopause status (premeno): menopause before age 45
+* Fracture risk score (raterisk): a self-reported estimate of fracture risk
+* Arm assistance (armassist): indicates if the participant needs to use their arms to stand up from a chair
+* Mother’s history of hip fracture (momfrac)
+* Fracture (outcome variable): indicates if any fracture occurred during the first year of follow-up
+
+To better understand the relationships between these variables and fracture risk, we constructed a causal diagram, or directed acyclic graph (DAG), based on our knowledge of the factors involved. The DAG visually represents assumed causal connections among the variables in the GLOW500 dataset.
+
+```{r, echo=FALSE}
+dag <- dagitty("dag {
+  age -> weight
+  age -> height
+  age -> smoke
+  age -> priorfrac
+  age -> premeno
+  age -> raterisk
+
+  height -> weight
+  weight -> bmi
+  height -> bmi
+
+  bmi -> armassist
+  bmi -> fracture
+  priorfrac -> fracture
+  premeno -> fracture
+  smoke -> fracture
+  momfrac -> fracture
+  armassist -> fracture
+  raterisk -> fracture
+}")
+
+ggdag(dag, layout = "sugiyama", text = FALSE, node_size = 8) + 
+  geom_dag_point(aes(color = (name == "fracture"))) +
+  geom_dag_text(aes(label = name), size = 5, fontface = "bold", color = "darkblue") +
+  scale_color_manual(values = c("TRUE" = "#E31A1C", "FALSE" = "lightgray")) +
+  theme_dag() +
+  theme(legend.position = "none", plot.title = element_text(face = "bold", size = 16)) +
+  labs(title = "Causal Diagram for Fracture Risk")
+
+```
+
+In this graph, age influences weight, height, smoking status, prior fracture history (priorfrac), menopause status (premeno), and the fracture risk score (raterisk), which in turn affects the outcome (fracture). Height affects weight and body mass index (BMI), while weight also influences BMI. BMI is connected to arm assistance and directly to fracture. This diagram is a simplified representation intended to guide the causal analysis and identify which variables to adjust for when estimating the effects of BMI and weight. It is not an exhaustive or definitive model but a starting point based on the available knowledge.
+
+# Bayesian Analysis 
+
+To estimate the effects of weight on fracture risk while accounting for confounding, we first identified the appropriate adjustment sets based on the causal DAG. Using functions from the dagitty and ggdag packages, we determined which variables to control for to estimate the total and direct effects of each exposure.
+
+This step is essential because adjusting for the correct variables helps avoid biased estimates caused by confounding, collider effects, or inappropriate adjustment for mediators.
+
+After establishing the adjustment sets, we proceeded to fit Bayesian logistic regression models. For each model, we specified prior distributions and used Hamiltonian Monte Carlo (HMC) sampling, as implemented in Stan, to efficiently draw samples from the posterior distributions. This approach lets us better understand the uncertainty around the effects and express the likelihood of different results.
+
+The following sections describe the adjustment set identification and Bayesian modeling steps for weight in detail.
+
+Before fitting the Bayesian models, we prepared the data to ensure consistent scaling and proper format for Stan. Variables with "Yes" or "No" responses were converted to numeric indicators. Continuous variables such as age, weight, height, and BMI were standardized to have mean zero and standard deviation one. This standardization helps prevent any one variable from dominating the model due to scale differences.
+
+Next, we selected the relevant variables for the analysis and converted the dataset into a  named list format, as required by Stan for input. This list includes the number of observations and all predictors and outcome variables needed for the model.
+
+```{r}
+# Load the GLOW500 dataset
+data("glow500")
+
+# Convert "Yes"/"No" variables to numeric (1 for "Yes", 0 for "No")
+glow500[] <- lapply(glow500, function(x) {
+  if (all(x %in% c("Yes", "No"))) {
+    return(as.numeric(x == "Yes"))
+  } else {
+    return(x)
+  }
+})
+
+# Standardize continuous variables to mean zero and standard deviation one
+glow500[, c('age','weight','height', 'bmi')] <- scale(glow500[, c('age','weight','height', 'bmi')])
+
+# Convert data frame subset to a named list for Stan
+glow500_subset <- glow500[ , c('age','weight','height','bmi','priorfrac','premeno','momfrac','armassist','smoke','raterisk', 'fracture')]
+glow500_list <- as.list(glow500_subset)
+
+# Add total number of observations as 'N'
+glow500_list$N <- nrow(glow500_subset)
+```
+
+## Weight
+
+The key question in this analysis is: Is there an effect of weight on fracture risk? To ensure accurate estimates, we first identified the variables that need adjustment using the causal DAG. This helps control for confounding and reduces bias. We used the `adjustmentSets()` function from the dagitty package to find these sets.
+
+When we study how one variable affects another, we consider two kinds of effects: the total effect and the direct effect.
+
+* The total effect shows how the variable influences the outcome through all possible paths, including those that go through other variables called mediators.
+* The direct effect shows the influence that goes straight from the variable to the outcome, without going through any mediators.
+
+Because these two effects involve different paths, we need to adjust for different variables in each case. For the direct effect, we adjust for confounders and also for mediators to isolate the direct link. For the total effect, we adjust only for confounders, so we capture the full effect including indirect paths.
+
+```{r}
+# Find adjustment sets for estimating the direct effect of weight on fracture
+adjustmentSets(dag, exposure = "weight", outcome = "fracture", effect = "direct")
+
+# Find adjustment sets for estimating the total effect of weight on fracture
+adjustmentSets(dag, exposure = "weight", outcome = "fracture")
+```
+
+Using the adjustmentSets function, we identified the sets of variables to adjust for when estimating the direct and total effects of weight on fracture risk.
+
+For the direct effect, the adjustment sets included:
+
+* Age and BMI 
+* BMI, menopause status (premeno), prior fracture history (priorfrac), fracture risk score (raterisk) and smoking status (smoke)
+
+For the total effect, the adjustment sets included:
+
+* Age and height 
+* Height, menopause status (premeno), prior fracture history (priorfrac), fracture risk score (raterisk) and smoking status (smoke)
+
+For both effects, we chose the simpler set because it is easier to interpret and avoids unnecessary complexity.
+
+### Direct effect
+
+We begin by estimating the direct effect of weight on fracture risk, adjusting for age and BMI as identified earlier. Because BMI acts as a mediator between weight and fracture, the direct effect model consists of two linked parts:
+
+1. Mediator model — modeling BMI as a function of weight:
+$$\hat{BMI}_i\sim\sf Normal (\mu_i,\sigma)$$
+$$\text{where }\mu_i= \alpha_{BMI}+\beta_{\text{BMI_weight}} weight_i$$
+2. Outcome model — modeling fracture probability as a logistic function of age, BMI, and weight:
+
+$$ fracture_i \sim \sf Binomial (1, p_i)$$
+$$\text{logit}(p_i)=\alpha+ \beta_{age} age_i+ \beta_{BMI} \hat{BMI}_i+ \beta_{weight} weight_i$$
+
+#### Checking priors
+
+Before fitting the model to the observed data, we first performed prior predictive checks to ensure that our chosen priors produce plausible values for both the mediator (BMI) and the outcome (fracture probability). The idea is to sample from the model using only the priors, without using the actual data, and verify that the simulated patterns are reasonable given the scientific context. This step helps confirm that our chosen priors are neither overly restrictive nor unrealistically wide before proceeding to the data analysis.
+
+```{r}
+direct_glow_prior <- "
+data {
+  int<lower=0> N;          // Number of observations for simulation
+  vector[N] age;           // Vector of age values
+  vector[N] weight;        // Vector of weight values
+}
+generated quantities {
+  // Mediator model parameters 
+  real aBM = normal_rng(0, 0.7);   // Intercept for BMI model
+  real bBM = normal_rng(0, 0.7);   // Slope for weight in BMI model
+  real<lower=0> sigma = exponential_rng(1);  // Standard deviation for BMI residuals
+  
+  // Fracture model parameters 
+  real a = normal_rng(0, 0.7);      // Intercept for fracture model
+  real bAGE = normal_rng(0, 0.7);   // Coefficient for age
+  real bBMI = normal_rng(0, 0.7);   // Coefficient for BMI
+  real bWEIGHT = normal_rng(0, 0.7);// Coefficient for weight
+  
+  vector[N] mu_BMI;    // Predicted BMI values from mediator model
+  vector[N] p;         // Predicted fracture probabilities from outcome model
+
+  // Loop over all observations to generate predicted BMI and fracture probabilities
+  for (i in 1:N) {
+    mu_BMI[i] = aBM + bBM * weight[i];   // BMI predicted by weight
+    p[i] = inv_logit(a + bAGE * age[i] + bBMI * mu_BMI[i] + bWEIGHT * weight[i]);  // Fracture probability
+  }
+}
+"
+
+N <- 1000
+weight_seq <- seq(min(glow500_list$weight), max(glow500_list$weight), length.out = N)  # Create sequence of weight values
+age_seq <- seq(min(glow500_list$age), max(glow500_list$age), length.out = N)          # Create sequence of age values
+
+# Run Stan prior predictive simulation with fixed parameters (no data fitting)
+direct_prior <- stan(
+  model_code = direct_glow_prior,
+  data = list(N = N, weight = weight_seq, age = age_seq),
+  chains = 4,
+  iter = 2000,
+  seed = 1000,
+  algorithm = 'Fixed_param'
+)
+```
+
+The first plot shows prior predictive lines from a Bayesian regression where BMI and weight are standardized. Each line, drawn from Normal(0, 0.7) priors on the slope, represents a possible relationship between weight and BMI before seeing data. Most lines are flat, but both positive and negative trends are allowed.
+
+The second plot shows prior predictive curves for fracture probability as a function of standardized weight, from a Bayesian outcome model including weight, age, and BMI. Coefficients have Normal(0, 0.7) priors, producing a wide range of curves that reflect weak assumptions and allow for positive or negative associations. This ensures flexibility and plausible probabilities between zero and one.
+
+#### Posterior distribution
+
+After verifying that the chosen priors produce reasonable predictions, we proceed to fit the full model to the observed data to estimate the direct effect of weight on fracture risk. The following Bayesian regression estimates the direct effect of weight on fracture risk while accounting for age as a confounder and BMI as a mediator. 
+
+```{r}
+direct_glow <- "
+data {
+  int<lower=0> N;                // Number of observations
+  vector[N] age;                 // Age variable
+  vector[N] bmi;                 // Body Mass Index (mediator)
+  vector[N] weight;              // Weight (exposure)
+  int<lower=0,upper=1> fracture[N];  // Fracture outcome (binary)
+}
+
+parameters {
+// Parameters for outcome model (fracture as outcome)
+  real a;            // Intercept for outcome model
+  real bWEIGHT;      // Effect of weight on fracture
+  real bAGE;         // Effect of age on fracture
+  real bBMI;         // Effect of BMI on fracture
+  
+  // Parameters for mediator model (BMI as outcome)
+  real aBM;          // Intercept for mediator model
+  real bBM;          // Effect of weight on BMI
+  real<lower=0> sigma;  // Standard deviation of BMI residuals
+}
+
+model {
+  vector[N] p;        // Probability of fracture for each observation
+  vector[N] mu_bmi;   // Predicted BMI mean for each observation
+  
+  // Priors for mediator model parameters
+  aBM ~ normal(0, 0.7);
+  bBM ~ normal(0, 0.7);
+  sigma ~ exponential(1);
+  
+  // Calculate predicted BMI means for all observations based on weight
+  for (i in 1:N) {
+    mu_bmi[i] = aBM + bBM * weight[i];
+  }
+  
+  // Likelihood for mediator: observed BMI assumed normal around predicted mean
+  bmi ~ normal(mu_bmi, sigma);
+  
+  // Priors for outcome model parameters
+  a ~ normal(0, 0.7);
+  bAGE ~ normal(0, 0.7);
+  bBMI ~ normal(0, 0.7);
+  bWEIGHT ~ normal(0, 0.7);
+  
+  // Calculate fracture probabilities for all observations
+  for (i in 1:N) {
+    p[i] = inv_logit(a + bAGE * age[i] + bBMI * bmi[i] + bWEIGHT * weight[i]);
+  }
+  
+  // Likelihood for outcome: fracture modeled as Bernoulli with probability p
+  fracture ~ binomial(1, p);
+}
+
+generated quantities {
+  vector[N] mu_BMI;      // Predicted BMI means for posterior predictive checks
+  vector[N] p;           // Predicted fracture probabilities
+  vector[N] log_lik;     // Log likelihood for each observation (for model comparison)
+  int fracture_pred[N];  // Simulated fracture outcomes from posterior predictive distribution
+  
+  for (i in 1:N) {
+    mu_BMI[i] = aBM + bBM * weight[i];
+    p[i] = inv_logit(a + bAGE * age[i] + bBMI * bmi[i] + bWEIGHT * weight[i]);
+    log_lik[i] = binomial_lpmf(fracture[i] | 1, p[i]);
+    
+    // Simulate fracture outcome based on predicted probability
+    fracture_pred[i] = bernoulli_rng(p[i]);
+  }
+}
+"
+# Fit the Bayesian model for the direct effect using Stan
+fit_direct_glow <- stan(
+  model_code = direct_glow,
+  data = glow500_list,
+  chains = 4,
+  iter = 2000,
+  warmup = 1000,
+  seed = 1000
+)
+```
+
+To analyze the Bayesian model results, we use the `summarize_results()` function from the `CLRtools` package. This function provides a summary of the model output along with visualizations that help us understand the posterior distributions and the model fit.
+
+First plot shows the distribution of possible values for each factor’s effect, such as the $\alpha, \beta_{weight}, \beta_{age}$, etc. Because the Bayesian model produces many simulated values for each factor, this chart uses density areas to display the range of likely values for each factor’s effect.
+
+The second plot compares the average fracture risk predicted by the model with the actual average fracture rate observed in the data. The actual average is calculated directly from the data by computing the mean of the fracture variable and is shown as a red line. The model’s predictions come from simulating many datasets using the estimated coefficients, and the plot shows how the average and standard deviation of these simulated outcomes compare to the real data. This helps us understand whether the model’s predictions match the true fracture risk and its natural variability.
+
+This function allows the user to provide their own matrix of posterior samples through the `ypredict` argument, as shown below. However, it can also calculate the posterior samples internally, but in that case the model will be a simple logistic regression without including mediators.
+
+```{r}
+# Extracting posterior predictive samples
+O_rep <- rstan::extract(fit_direct_glow)$fracture_pred
+
+summarize_results(
+  model = fit_direct_glow, 
+  ypredict = O_rep, 
+  data = glow500_subset, 
+  outcome = 'fracture', 
+  var.param = c('a' = 'a', 'age' = 'bAGE', 'bmi' = 'bBMI', 'weight' = 'bWEIGHT', 'aBM' = 'aBM', 'bBM' = 'bBM'), 
+  rounding = 6, 
+  prob = 0.89, 
+  point.est = 'median'
+)
+
+```
+
+All variables were standardised, so the reported effects correspond to a one standard deviation increase. The coefficient for weight was −0.53 (OR ≈ 0.59, 95% credible interval 0.34 to 0.98), indicating that, among people with the same age and BMI, higher weight was linked to lower odds of fracture. This represents the direct effect of weight, not the total effect, capturing the influence of weight on fracture that occurs independently of BMI. Notably, the 95% credible interval does not include 1, providing evidence that this effect is genuine and unlikely to be due to chance.
+
+BMI showed a positive association with fracture (OR ≈ 1.86, 95% credible interval 1.14 to 3.13) when controlling for weight and age, and age also had a positive association with fracture at fixed BMI and weight. However, the coefficients for BMI and age reflect conditional associations rather than total causal effects and should not be interpreted as direct effects to avoid the Table 2 fallacy.
+
+In the mediator model, weight was a strong predictor of BMI (coefficient 0.94, 95% credible interval 0.91 to 0.97), meaning that BMI increased by nearly one standard deviation for each one standard deviation increase in weight.
+
+The posterior predictive checks show that the model fits the observed data well in terms of both the mean and the standard deviation. In the left panel, the simulated means from the model closely match the observed mean, which lies clearly within the range of simulated values. Similarly, the right panel demonstrates that the observed standard deviation aligns well with the distribution of simulated standard deviations. These findings suggest that the model can capture important features of the data (average value and variability).
+
+Additionally, the Bayesian model needs to be checked to ensure it is reliable and to determine if more iterations, better priors, or model adjustments are necessary. The `diagnostic_bayes()` function from the `CLRtools` package produces several key diagnostic plots including Rhat statistics, Effective Sample Size (ESS), trace plots, and rank plots. Rhat statistics measure how well the Markov chains have mixed and converged, with values close to 1 indicating good convergence and values below 1.01 preferred. ESS indicates how many independent samples the MCMC draws represent, reflecting sampling efficiency. Trace plots display the sampled parameter values across iterations, helping assess chain mixing and exploration of the parameter space, while rank plots detect whether the sampler explores the parameter space evenly.
+
+```{r}
+diagnostic_bayes(
+  model = fit_direct_glow, 
+  var.param = c('a', 'bAGE', 'bBMI', 'bWEIGHT', 'aBM', 'bBM')
+)
+```
+
+Model diagnostics indicate good convergence and sampling quality. The Rhat statistics were all below 1.002, suggesting chains mixed well. Effective sample sizes relative to total samples $(N_{eff}/N)$ exceeded 0.05, with histograms mostly between 3,000 and 6,000, indicating sufficient effective sampling. Trace and rank plots showed strong overlap across all four chains for all coefficients, supporting stable and reliable posterior estimates. 
+
+### Total effect
+
+Next, we turn to estimating the total effect of weight on fracture risk. Unlike the direct effect, which holds BMI constant to isolate weight’s influence independent of BMI, the total effect captures the overall impact of weight on fracture, including both direct pathways and those mediated through BMI. Estimating the total effect allows us to understand the full influence of weight on fracture risk without adjusting for intermediate variables like BMI. This provides a more complete picture of how weight affects fracture, through all paths.
+
+For estimating the total effect of weight on fracture risk, we use the adjustment set identified from the causal DAG, which includes age and height. The model is:
+
+$$ fracture_i \sim \sf Binomial (1, p_i)$$
+$$\text{logit}(p_i)=\alpha+ \beta_{age} age_i+ \beta_{height} height_i+ \beta_{weight} weight_i$$
+
+#### Checking priors
+
+For the total effect model, we similarly conducted prior predictive checks to validate that the specified priors yield plausible values for fracture risk when adjusting for the new set of covariates. This step ensures that the model’s assumptions remain appropriate and that the priors support realistic outcome patterns before incorporating the observed data.
+
+```{r}
+total_glow_prior <- "
+data {
+  int<lower=0> N;          // Number of observations for simulation
+  vector[N] age;           // Vector of age values
+  vector[N] weight;        // Vector of weight values
+  vector[N] height;        // Vector of height values
+}
+generated quantities {
+  // Fracture model parameters
+  real a = normal_rng(0, 0.7);        // Intercept for fracture model
+  real bAGE = normal_rng(0, 0.7);     // Coefficient for age
+  real bHEIGHT = normal_rng(0, 0.7);  // Coefficient for height
+  real bWEIGHT = normal_rng(0, 0.7);  // Coefficient for weight
+  
+  vector[N] p;
+
+  // Loop over all observations to generate fracture probabilities
+  for (i in 1:N) {
+    p[i] = inv_logit(a + bAGE * age[i] + bHEIGHT * height[i] + bWEIGHT * weight[i]);
+
+  }
+}
+"
+N <- 1000
+height_seq <- seq(min(glow500_list$height), max(glow500_list$height), length.out = N)  # Create sequence of height values
+weight_seq <- seq(min(glow500_list$weight), max(glow500_list$weight), length.out = N)  # Create sequence of weight values
+age_seq <- seq(min(glow500_list$age), max(glow500_list$age), length.out = N)           # Create sequence of age values
+
+# Run Stan prior predictive simulation with fixed parameters (no data fitting)
+total_prior <- stan(
+  model_code = total_glow_prior,
+  data = list(N = N, height = height_seq, weight = weight_seq, age = age_seq),
+  chains = 4,
+  iter = 2000,
+  seed = 1000,
+  algorithm = 'Fixed_param'
+)
+
+# Extract simulated fracture probabilities 
+p_sim_total <- extract(total_prior)$p
+
+# Plot prior predictive expected BMI curves against weight
+plot(NULL, xlim=range(weight_seq), ylim=c(0,1), xlab = "weight", ylab = "Probability")
+
+for (i in 1:100) {
+  lines(weight_seq, p_sim_total[i, ], col = alpha("black", 0.1))
+}
+
+```
+
+The prior predictive plot shows possible links between standardized weight and the chance of the outcome based only on the priors. The smooth S-shaped curves look like realistic logistic patterns and allow for both positive and negative effects. This means the priors are reasonable, flexible, and not so informative, letting us explore the data without strong assumptions.
+
+#### Posterior distribution
+
+After confirming that the priors produce reasonable predictions, we fit the total effect model to the observed data. This Bayesian regression estimates the overall effect of weight on fracture risk while adjusting for age and height, capturing both direct and indirect pathways.
+
+```{r}
+total_glow <- "
+data {
+  int<lower=0> N;                // Number of observations
+  vector[N] age;                 // Age variable
+  vector[N] height;              // Height Variable 
+  vector[N] weight;              // Weight (exposure)
+  int<lower=0,upper=1> fracture[N];  // Fracture outcome (binary)
+}
+parameters {
+// Parameters for outcome model 
+ real a;                // Intercept for outcome model
+  real bWEIGHT;         // Effect of weight on fracture
+  real bAGE;            // Effect of age on fracture
+  real bHEIGHT;         // Effect of height on fracture
+  
+}
+model {
+  vector[N] p;          // Probability of fracture for each observation
+  
+  // Priors for outcome model parameters
+  a ~ normal(0, 0.7);
+  bAGE ~ normal(0, 0.7);
+  bWEIGHT ~ normal(0, 0.7);
+  bHEIGHT ~ normal(0, 0.7);
+
+  // Calculate fracture probabilities for all observations
+  for (i in 1:N) {
+    p[i] = inv_logit(a + bAGE * age[i] + bHEIGHT * height[i] + bWEIGHT * weight[i]);
+  }
+  
+  // Likelihood for outcome: fracture modeled as Bernoulli with probability p
+  fracture ~ binomial( 1 , p );
+}
+
+generated quantities {
+  vector[N] p;            // Predicted fracture probabilities
+  vector[N] log_lik;      // Log likelihood for each observation (for model comparison)
+  int fracture_pred[N];   // Simulated fracture outcomes from posterior predictive distribution
+
+  for (i in 1:N) {
+    p[i] = inv_logit(a + bAGE * age[i] + bHEIGHT * height[i] + bWEIGHT * weight[i]);
+    log_lik[i] = binomial_lpmf(fracture[i] | 1, p[i]);
+    
+    // Simulate fracture outcome based on predicted probability
+    fracture_pred[i] = bernoulli_rng(p[i]);  
+  }
+}
+"
+# Fit the Bayesian model for the total effect using Stan
+fit_total_glow <- stan(
+  model_code = total_glow,
+  data = glow500_list,
+  chains = 4,
+  iter = 2000,
+  warmup = 1000,
+  seed = 1000
+)
+```
+
+For the total effect analysis, we again use the `summarize_results()` function from the `CLRtools` package to explore the Bayesian model output. This function provides helpful summaries and visualizations of the posterior distributions and model fit, just as in the direct effect analysis.
+
+By comparing the predicted fracture risk with the observed data and visualizing the range of plausible effect sizes, we can assess how well the total effect model captures the data and the uncertainty around the weight effect when adjusting for age and height.
+
+
+```{r}
+# Extracting posterior predictive samples
+O_rep <- rstan::extract(fit_total_glow)$fracture_pred
+
+summarize_results(
+  model = fit_total_glow, 
+  ypredict = O_rep, 
+  data= glow500_subset, 
+  outcome = 'fracture', 
+  var.param = c('a'='a', 'age' = "bAGE", 'height'='bHEIGHT', 'weight'='bWEIGHT'), 
+  rounding = 6, 
+  prob = 0.89, 
+  point.est = 'median')
+```
+
+All variables were standardized, so the coefficients represent the expected change in the log odds of fracture for a one standard deviation increase in each variable, holding the others constant.
+
+The coefficient for weight is 0.13 (95% credible interval from about -0.09 to 0.35), meaning the data are consistent with both a small positive or no effect of weight on fracture risk after adjusting for age and height. Because the interval includes zero, there is uncertainty about whether weight has a meaningful effect in this model.
+
+Age shows a positive association with fracture risk (coefficient 0.45, 95% credible interval approximately 0.23 to 0.67), indicating that higher age is linked to higher fracture risk, holding height and weight constant. Height has a negative association (coefficient −0.28, 95% credible interval approximately −0.51 to −0.05), suggesting taller individuals tend to have lower fracture risk when accounting for age and weight. However, these numbers show how each factor relates to fracture risk when we hold the other factors fixed. They are not the full cause-and-effect effects, so we should avoid interpreting them as direct effects to prevent the Table 2 fallacy.
+
+The posterior predictive checks suggest the model represents the observed data well. The left panel shows that the model’s simulated means are close to the actual mean, while the right panel shows that the simulated standard deviations match the observed variability. Together, these plots indicate that the model can reproduce the main features central value and spread of the data.
+
+As with the direct effect, we check the total effect model to ensure the Bayesian results are reliable. We use the same diagnostics from `CLRtools`, including Rhat Statistics, Effective Sample Size, and posterior plots, to confirm that the model has converged and the posterior samples are robust.
+
+```{r}
+diagnostic_bayes(
+  model = fit_total_glow, 
+  var.param = c( 'a', "bAGE", 'bWEIGHT', 'bHEIGHT'))
+```
+
+The model diagnostics confirm that the posterior estimates are stable and reliable. Rhat values were all below 1.01, showing that the chains converged properly. Effective sample sizes $(N_{eff}/N)$ were sufficient, mostly ranging from 2,000 to 6,000, and both trace and rank plots showed consistent overlap across the four chains for all coefficients. These results indicate the model produced stable samples for inference.
+
+## Conclusion
+
+Weight does have a causal effect on fracture risk, but the effect depends on the pathway considered. The direct effect, which isolates the influence of weight independent of BMI, is negative, suggesting that at the same BMI, higher weight lowers fracture risk. At the same time, the indirect effect through BMI is positive, because higher weight increases BMI, and higher BMI raises fracture risk. When combined, the total effect is small and slightly positive, meaning that overall, weight has only a minor influence on fracture risk. These results highlight that weight’s causal impact is complex: it acts in opposite directions along different pathways, and overall the effect is small.
+
+
+

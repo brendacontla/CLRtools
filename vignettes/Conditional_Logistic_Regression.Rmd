@@ -1,0 +1,171 @@
+---
+title: "Conditional_Logistic_Regression"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Conditional_Logistic_Regression}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.width = 7, 
+  fig.height = 4
+)
+```
+
+```{r setup}
+library(CLRtools)
+library(survival)
+library(dplyr)
+```
+
+The CLRtools package provides a suite of functions designed to support the structured development of conditional logistic regression models, guided by the Purposeful Selection Method introduced by Hosmer, Lemeshow, and Sturdivant in **Applied Logistic Regression** (2013). This method outlines a systematic, seven-step process for constructing multivariable models, adapted here for use with matched case-control data.
+
+This vignette parallels the approach presented in the Logistic Regression vignette but adapts it for use with matched data. The same modelling process is followed, using functions and methods appropriate for conditional logistic regression analysis. The dataset used is **GLOW11M**, derived from the original **GLOW500** dataset for illustrative purposes. GLOW11M is a 1:1 matched case-control dataset, where each woman who experienced a fracture was matched with a woman of the same age who did not experience a fracture.
+
+In the following sections, we walk through each of the seven steps of the Purposeful Selection Method, applying them to the GLOW11M dataset using functions from CLRtools.
+
+### Step 1. Fit univariable models
+
+The first step involves evaluating each predictor individually using univariable conditional logistic regression models. The `univariable.clogmodels()` function is used to fit each model and generate a summary table. It is specifically adapted for conditional logistic regression, with the strata argument allowing the user to specify the variable that identifies each matched set. The output includes optional odds ratios, confidence intervals, and p-values based on the Wald test.
+
+Additionally, the `discordant.pairs()` function in the package calculates the number of discordant (informative) pairs for each categorical variable. Together, the univariable model results and discordant pair counts correspond to Table 7.1 in Chapter 7 of the book, and are used to guide the selection of candidate variables for the multivariable model.
+
+Variables with p-values below 0.25 are considered candidates for inclusion in the initial multivariable model. According to this criterion, the selected variables are: `height`, `priorfrac`, `premeno`, `momfrac`, `armassist`, and `raterisk`. Although `weight` and `bmi` were not statistically significant on their own, the authors retained them due to being interrelated with `height`. 
+
+```{r}
+# Predictor variables to evaluate
+var_to_test <- c('height','weight', 'bmi', 'priorfrac', 'premeno', 'momfrac', 'armassist','smoke', 'raterisk')
+
+# Define OR scaling factors (used to interpret ORs per meaningful unit)
+OR_values <- c(10, 10, 3, 1, 1, 1, 1, 1, 1, 1)
+
+# Generate the univariable models table
+univariable.clogmodels(glow11m, yval = 'fracture',xval = var_to_test, strata='pair', OR=TRUE, inc.or = OR_values)
+
+# Obtaining the discordant pairs
+discordant.pairs(glow11m, outcome = 'fracture', strata = 'pair')
+```
+
+### Step 2: Fit Initial multivariate Model and Refine Predictors
+
+Next, we build a multivariable conditional logistic regression model incorporating the variables identified in Step 1. At this stage, variables that do not show statistical significance or lack clinical importance are flagged as potential candidates for removal and subjected to further evaluation.
+
+```{r}
+summary(clogit(as.numeric(fracture) ~ height + weight + bmi + priorfrac + premeno + momfrac + armassist + raterisk + strata(pair), data = glow11m))
+```
+
+Several variables are not statistically significant at this stage, with the first focus was on `premeno` and `raterisk` as candidates for removal and further analysis. In the book, a partial likelihood ratio test was performed comparing models with and without these variables, resulting in a p-value of 0.49, indicating that their removal did not lead to a significant change in the model.
+
+### Step 3: Assess Potential Confounding 
+
+In this step, we evaluate whether any of the variables considered for removal may act as confounders by examining their influence on the coefficients of the other variables retained in the model. For each candidate variable, we compare the coefficient estimates from a model that includes the variable to a model that excludes it. This allows us to evaluate whether excluding the variable significantly alters the estimated effects of the remaining predictors. The percentage change in the coefficients, denoted as delta beta hat ($\Delta \hat{\beta}\%$), is used as a diagnostic measure. As recommended by Hosmer et al., (2013), a change exceeding 20% in any coefficient suggests the presence of confounding, and the variable should be retained in the model for adjustment.
+
+As with the logistic regression approach, the `check_coef_change()` function can be used to automate this comparison and calculate the percentage change in coefficients for each added variable. For conditional logistic regression, the strata argument must also be specified to account for the matched design.
+
+```{r}
+# Variables that were not significant in Step 2 to check
+candidate.exclusion <- c('premeno', 'raterisk') 
+
+# Significant variables in Step 2
+var.preliminar <- c('height', 'weight', 'bmi','priorfrac',  'momfrac', 'armassist') 
+
+# Check for confounding 
+check_coef_change(data = glow11m, yval = 'fracture', xpre = var.preliminar, xcheck = candidate.exclusion, strata = 'pair')
+```
+
+For the variables `height`, `weight`, and `bmi`, the authors fitted three models, each including a different combination of two of the three variables. They found that the model containing `weight` and `bmi` had the smallest (i.e., best) log-likelihood, and both variables were statistically significant at the 5% level. Therefore, this model was selected for the next steps.
+
+```{r}
+summary(clogit(as.numeric(fracture) ~ weight + bmi + priorfrac + momfrac + armassist + strata(pair), data = glow11m))
+```
+
+### Step 4: Reassess Excluded Variables 
+
+In this step, we evaluate the variables that were excluded in Step 1 by reintroducing them into the model one at a time. Although these variables were not individually significant in univariable analysis, their relationship with the outcome may change when adjusted for other covariates. The `check_coef_significant()` function does this process by fitting each model with an added variable and reporting the corresponding coefficient estimates, standard errors, and Wald test statistics (z and p-values). When applying this function to conditional logistic regression, the strata argument must be included to properly account for the matched design. 
+
+```{r}
+# Variables excluded in Step 1 to check
+excluded<-c('smoke')
+
+# Preliminary model variables (retained after Step 2 and 3)
+var.preliminar <- c('weight','bmi', 'priorfrac', 'momfrac','armassist') 
+
+check_coef_significant(data = glow11m, yval = 'fracture', xpre = var.preliminar, xcheck = excluded, strata = 'pair')
+```
+
+The variable `smoke` did not become statistically significant when added individually to the multivariable model and, therefore, was not retained.
+
+### Step 5: Assess Linearity of Continuous Predictors with Respect to the Logit
+
+In this step, we need to assess whether each continuous predictor has a roughly linear association with the log-odds of the outcome, which is an important assumption in conditional logistic regression. The book outlines several strategies for this purpose, such as LOWESS smoothing, quartile-based design variables, fractional polynomials, and spline functions. Because the choice of method depends heavily on the dataset and research context, and because many established R packages already support these diagnostics, no dedicated function is included in this package. Users are encouraged to select an approach that aligns with their modelling goals and data characteristics.
+
+For this dataset, the continuous variables to be assessed for linearity are `weight` and `bmi`. After evaluating their relationships with the logit, the authors concluded that no transformation was necessary, as both variables appeared approximately linear. As a result, the model from the previous step remains the same.
+
+### Step 6: Assess Interaction Terms
+
+In this step, interaction terms between variables in the preliminary main-effects model (from Step 5) are evaluated one at a time. This helps determine whether the effect of one variable varies across levels of another, which may reveal important effect modifications. Interactions that are both statistically significant, based on likelihood ratio tests, and clinically meaningful are retained, while those lacking significance are excluded. Depending on the context, a 5% or 10% significance level may be applied.
+
+The `check_interactions()` function does this process by fitting each interaction model and reporting the model's log-likelihood, the likelihood ratio test result comparing it to the main-effects model, and the corresponding p-value. For conditional logistic regression, users must specify the strata argument to correctly account for the matched structure of the data.
+
+```{r}
+var.maineffects<-c('weight', 'bmi','priorfrac','momfrac','armassist')
+
+check_interactions(data = glow11m, variables = var.maineffects, yval = 'fracture', rounding = 4, strata = 'pair')
+```
+
+For this dataset, no interactions were statistically significant at the 5% level. Therefore, the model includes only the main effects.
+
+```{r}
+final.model <- clogit(as.numeric(fracture) ~ weight + bmi + priorfrac + momfrac + armassist + strata(pair), data = glow11m)
+summary(final.model)
+```
+
+### Step 7: Perform Model Assessment
+
+To evaluate the fit of the conditional logistic regression models, the authors applied an extension of regression diagnostics specifically designed for conditional logistic regression. These diagnostics can be obtained using the residuals_clog() function from the package, which returns a dataset containing the residuals, leverage values, and diagnostic plots described in Chapter 7 of the book.
+
+```{r}
+# Converting the outcome from "Yes"/"No" to binary 0/1, as required by the function
+glow11m$fracture <- ifelse(glow11m$fracture == "Yes", 1, 0)
+
+# 
+head(residuals_clog(final.model, strata = glow11m$pair, y = glow11m$fracture, plot = TRUE)$data.results)
+residuals_clog(final.model, strata = glow11m$pair, y = glow11m$fracture, plot = TRUE)$leverage
+residuals_clog(final.model, strata = glow11m$pair, y = glow11m$fracture, plot = TRUE)$change.Pearsonchi
+residuals_clog(final.model, strata = glow11m$pair, y = glow11m$fracture, plot = TRUE)$cooks
+residuals_clog(final.model, strata = glow11m$pair, y = glow11m$fracture, plot = TRUE)$m.Pearsonchi
+residuals_clog(final.model, strata = glow11m$pair, y = glow11m$fracture, plot = TRUE)$mcooks
+```
+
+To explore individual outliers more closely, the dataset of residuals returned by the residuals_logistic() function can be used. Outliers can be identified by inspecting the plots and looking for values that deviate substantially from the rest of the data. The authors recommend focusing on points that are clearly separated from the general pattern. These potential outliers are filtered in the code below, and the eight covariate patterns identified by the authors in Table 5.10 are recovered.
+
+To investigate outliers in the matched dataset, the residuals output from the residuals_clog() function can be used. By examining diagnostic plots, we look for matched pairs whose residual values are distant from the rest. The code below filters such pairs and retrieves the six matched sets identified as noteworthy in Table 7.4, which will be further investigated.
+
+```{r}
+# Obtain residual diagnostics for the conditional logistic regression model.
+residuals.data<-residuals_clog(final.model, strata = glow11m$pair, y = glow11m$fracture, plot = TRUE)$data.results
+
+# Summarize the delta chi-squared and delta beta for each matched pair.
+glow.match<-residuals.data %>% group_by(pair) %>% dplyr::summarise(sum_deltachi=sum(deltachi), sum_deltabeta=sum(deltabeta))
+
+# Identify individual observations considered potential outliers based on thresholds from the plot
+outliers<-subset(residuals.data, deltachi>3 | deltabeta>0.15 )
+outliers.match<-subset(glow.match, sum_deltachi>3 | sum_deltabeta >0.15)
+
+# Subset all observations belonging to the identified outlier pairs.
+glow.outieliers<-subset(residuals.data, pair %in% outliers$pair)
+
+# Reorder and display the final table of potential outliers and their diagnostics.
+glow.outieliers.t<-glow.outieliers[,c(7,1:5,8,12,13,10)]
+glow.outieliers.t
+outliers.match
+```
+
+
+
+
+

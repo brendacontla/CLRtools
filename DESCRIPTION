@@ -1,0 +1,47 @@
+Package: CLRtools
+Title: Diagnostic Tools for Logistic and Conditional Logistic Regression
+Version: 0.1.0
+Authors@R:
+    c(
+      person("Brenda", "Contla Hernández",
+             email = "brendacontla11@gmail.com",
+             role = c("aut", "cre")),
+      person("Matthieu", "Vignes",
+             role = "ctb",
+             comment = "Provided statistical guidance, conceptual feedback, and supervision"),
+      person("Chris", "Compton",
+             role = "ctb",
+             comment = "Provided statistical guidance, conceptual feedback, and supervision")
+    )
+Description: Provides tools for fitting, assessing, and comparing logistic
+  and conditional logistic regression models. Includes residual diagnostics
+  and goodness of fit measures for model development and evaluation in
+  matched case control studies.
+License: GPL-3
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.3
+Imports: 
+    bayesplot,
+    caret,
+    dplyr,
+    ggplot2,
+    ggpubr,
+    lmtest,
+    loo,
+    patchwork,
+    RColorBrewer,
+    rlang,
+    rstan,
+    survival,
+    tidyr
+Suggests:
+    dagitty,
+    ggdag,
+    knitr,
+    rmarkdown,
+    rstanarm
+VignetteBuilder: knitr
+Depends: 
+    R (>= 3.5)
+LazyData: true
