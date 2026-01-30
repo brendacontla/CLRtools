@@ -12,7 +12,7 @@ Contributions and suggestions are welcome.
   follow:
 
 ``` r
-install.packages("ggpubr")
+install.packages("CLRtools")
 ```
 
 - Or, install the latest version from
