@@ -1,6 +1,6 @@
 Package: CLRtools
 Title: Diagnostic Tools for Logistic and Conditional Logistic Regression
-Version: 0.1.0
+Version: 0.1.1
 Authors@R:
     c(
       person("Brenda", "Contla Hernández",

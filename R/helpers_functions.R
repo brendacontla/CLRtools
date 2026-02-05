@@ -2,7 +2,7 @@ utils::globalVariables(c(
   "y", "est.prob", "Sensitivity", "Cutpoint", "Specificity", "Specificity1",
   "pair", "theta", "deltachi", "deltabeta", "sum_deltachi", "sum_deltabeta", 'data', 'prediction', 'mod',
   'E_bin', 'draw', 'elpd_loo', 'mean_observed', 'mean_r', 'model', 'model_name',
-  'prob', 'sd_observed', 'sd_r', 'se', 'y_rep'
+  'prob', 'sd_observed', 'sd_r', 'se', 'y_rep', 'id'
 ))
 
 
