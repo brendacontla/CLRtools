@@ -4,7 +4,7 @@ Version: 0.1.1
 Authors@R:
     c(
       person("Brenda", "Contla Hernández",
-             email = "brendacontla11@gmail.com",
+             email = "B.Hernandez@massey.ac.nz",
              role = c("aut", "cre")),
       person("Matthieu", "Vignes",
              role = "ctb",
@@ -45,3 +45,7 @@ VignetteBuilder: knitr
 Depends: 
     R (>= 3.5)
 LazyData: true
+URL: https://github.com/brendacontla/CLRtools
+BugReports: https://github.com/brendacontla/CLRtools/issues
+
+

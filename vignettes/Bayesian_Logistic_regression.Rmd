@@ -177,7 +177,8 @@ $$\text{logit}(p_i)=\alpha+ \beta_{age} age_i+ \beta_{BMI} \hat{BMI}_i+ \beta_{w
 
 Before fitting the model to the observed data, we first performed prior predictive checks to ensure that our chosen priors produce plausible values for both the mediator (BMI) and the outcome (fracture probability). The idea is to sample from the model using only the priors, without using the actual data, and verify that the simulated patterns are reasonable given the scientific context. This step helps confirm that our chosen priors are neither overly restrictive nor unrealistically wide before proceeding to the data analysis.
 
-```{r}
+The following chunk shows the workflow for users. The calibrated model is saved in the file inst/extdata.
+```{r, eval=FALSE}
 direct_glow_prior <- "
 data {
   int<lower=0> N;          // Number of observations for simulation
@@ -220,9 +221,42 @@ direct_prior <- stan(
   seed = 1000,
   algorithm = 'Fixed_param'
 )
+
+## Extract parameters
+M_mu_BMI <- extract(direct_prior)$mu_BMI[1:200, ]
+p_sim_direct <- extract(direct_prior)$p[1:200, ]
+
+# Save the fitted object for CRAN vignette
+saveRDS(list(mu_BMI = M_mu_BMI, p = p_sim_direct), file = "direct_prior_p.rds")
 ```
 
-The first plot shows prior predictive lines from a Bayesian regression where BMI and weight are standardized. Each line, drawn from Normal(0, 0.7) priors on the slope, represents a possible relationship between weight and BMI before seeing data. Most lines are flat, but both positive and negative trends are allowed.
+```{r}
+N <- 1000
+weight_seq <- seq(min(glow500_list$weight), max(glow500_list$weight), length.out = N)  # Create sequence of weight values
+
+# Load model data
+direct_prior <- readRDS(system.file("extdata", "direct_prior_p.rds", package = "CLRtools"))
+M_mu_BMI <- direct_prior$mu_BMI
+p_sim_direct <- direct_prior$p
+
+### First plot
+plot(NULL, xlim=range(weight_seq), ylim=c(-6, 6), xlab = "Weight", ylab = "mu_BMI")
+
+# Plot prior predictive curves for the first 200 draws
+for (i in 1:200) {
+  lines(weight_seq, M_mu_BMI[i, ], col = alpha("black", 0.1))
+}
+
+### Second plot
+plot(NULL, xlim=range(weight_seq), ylim=c(0, 1), xlab = "Weight", ylab = "Probability")
+
+# Plot prior predictive curves for the first N draws
+for (i in 1:200) {
+  lines(weight_seq, p_sim_direct[i, ], col = alpha("black", 0.1))
+}
+```
+
+The first plot shows prior predictive lines from a Bayesian regression where BMI and weight are standardized. Each line, drawn from Normal(0, 0.7) priors on the slope, represents a possible relationship between weight and BMI before seeing data. Most lines are almost flat, but both positive and negative trends are allowed.
 
 The second plot shows prior predictive curves for fracture probability as a function of standardized weight, from a Bayesian outcome model including weight, age, and BMI. Coefficients have Normal(0, 0.7) priors, producing a wide range of curves that reflect weak assumptions and allow for positive or negative associations. This ensures flexibility and plausible probabilities between zero and one.
 
@@ -230,6 +264,7 @@ The second plot shows prior predictive curves for fracture probability as a func
 
 After verifying that the chosen priors produce reasonable predictions, we proceed to fit the full model to the observed data to estimate the direct effect of weight on fracture risk. The following Bayesian regression estimates the direct effect of weight on fracture risk while accounting for age as a confounder and BMI as a mediator. 
 
+The following chunk shows the workflow for users. The calibrated model is saved in the file inst/extdata.
 ```{r}
 direct_glow <- "
 data {
@@ -369,7 +404,8 @@ $$\text{logit}(p_i)=\alpha+ \beta_{age} age_i+ \beta_{height} height_i+ \beta_{w
 
 For the total effect model, we similarly conducted prior predictive checks to validate that the specified priors yield plausible values for fracture risk when adjusting for the new set of covariates. This step ensures that the model’s assumptions remain appropriate and that the priors support realistic outcome patterns before incorporating the observed data.
 
-```{r}
+The following chunk shows the workflow for users. The calibrated model is saved in the file inst/extdata.
+```{r, eval=FALSE}
 total_glow_prior <- "
 data {
   int<lower=0> N;          // Number of observations for simulation
@@ -408,17 +444,29 @@ total_prior <- stan(
   algorithm = 'Fixed_param'
 )
 
-# Extract simulated fracture probabilities 
-p_sim_total <- extract(total_prior)$p
+p_sim_total <- extract(total_prior)$p[1:200, ]
+
+# Save the fitted object for CRAN vignette
+saveRDS(list(p = p_sim_total ), file = "total_prior_p.rds")
+```
+
+```{r}
+N <- 1000
+weight_seq <- seq(min(glow500_list$weight), max(glow500_list$weight), length.out = N)  # Create sequence of weight values
+
+# Load model
+total_prior <- readRDS(system.file("extdata", "total_prior_p.rds", package = "CLRtools"))
+p_sim_total <- total_prior$p
 
 # Plot prior predictive expected BMI curves against weight
 plot(NULL, xlim=range(weight_seq), ylim=c(0,1), xlab = "weight", ylab = "Probability")
 
-for (i in 1:100) {
+for (i in 1:200) {
   lines(weight_seq, p_sim_total[i, ], col = alpha("black", 0.1))
 }
 
 ```
+
 
 The prior predictive plot shows possible links between standardized weight and the chance of the outcome based only on the priors. The smooth S-shaped curves look like realistic logistic patterns and allow for both positive and negative effects. This means the priors are reasonable, flexible, and not so informative, letting us explore the data without strong assumptions.
 
@@ -426,6 +474,7 @@ The prior predictive plot shows possible links between standardized weight and t
 
 After confirming that the priors produce reasonable predictions, we fit the total effect model to the observed data. This Bayesian regression estimates the overall effect of weight on fracture risk while adjusting for age and height, capturing both direct and indirect pathways.
 
+The following chunk shows the workflow for users. The calibrated model is saved in the file inst/extdata.
 ```{r}
 total_glow <- "
 data {
