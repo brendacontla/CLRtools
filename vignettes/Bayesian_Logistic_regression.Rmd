@@ -272,7 +272,7 @@ data {
   vector[N] age;                 // Age variable
   vector[N] bmi;                 // Body Mass Index (mediator)
   vector[N] weight;              // Weight (exposure)
-  int<lower=0,upper=1> fracture[N];  // Fracture outcome (binary)
+  array[N] int<lower=0,upper=1> fracture;  // Fracture outcome (binary)
 }
 
 parameters {
@@ -324,7 +324,7 @@ generated quantities {
   vector[N] mu_BMI;      // Predicted BMI means for posterior predictive checks
   vector[N] p;           // Predicted fracture probabilities
   vector[N] log_lik;     // Log likelihood for each observation (for model comparison)
-  int fracture_pred[N];  // Simulated fracture outcomes from posterior predictive distribution
+  array[N] int fracture_pred;  // Simulated fracture outcomes from posterior predictive distribution
   
   for (i in 1:N) {
     mu_BMI[i] = aBM + bBM * weight[i];
@@ -482,7 +482,7 @@ data {
   vector[N] age;                 // Age variable
   vector[N] height;              // Height Variable 
   vector[N] weight;              // Weight (exposure)
-  int<lower=0,upper=1> fracture[N];  // Fracture outcome (binary)
+  array[N] int<lower=0,upper=1> fracture;  // Fracture outcome (binary)
 }
 parameters {
 // Parameters for outcome model 
@@ -513,7 +513,7 @@ model {
 generated quantities {
   vector[N] p;            // Predicted fracture probabilities
   vector[N] log_lik;      // Log likelihood for each observation (for model comparison)
-  int fracture_pred[N];   // Simulated fracture outcomes from posterior predictive distribution
+  array[N] int fracture_pred;   // Simulated fracture outcomes from posterior predictive distribution
 
   for (i in 1:N) {
     p[i] = inv_logit(a + bAGE * age[i] + bHEIGHT * height[i] + bWEIGHT * weight[i]);
@@ -576,6 +576,3 @@ The model diagnostics confirm that the posterior estimates are stable and reliab
 ## Conclusion
 
 Weight does have a causal effect on fracture risk, but the effect depends on the pathway considered. The direct effect, which isolates the influence of weight independent of BMI, is negative, suggesting that at the same BMI, higher weight lowers fracture risk. At the same time, the indirect effect through BMI is positive, because higher weight increases BMI, and higher BMI raises fracture risk. When combined, the total effect is small and slightly positive, meaning that overall, weight has only a minor influence on fracture risk. These results highlight that weight’s causal impact is complex: it acts in opposite directions along different pathways, and overall the effect is small.
-
-
-
