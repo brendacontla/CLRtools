@@ -8,7 +8,7 @@ Contributions and suggestions are welcome.
 
 ## Installation and loading
 
-- Install from [CRAN](https://cran.rstudio.com/web/packages/CLRtools/) as
+- Install from [CRAN](https://CRAN.R-project.org/package=CLRtools) as
   follow:
 
 ``` r

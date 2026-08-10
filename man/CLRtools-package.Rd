@@ -8,8 +8,21 @@
 \description{
 Provides tools for fitting, assessing, and comparing logistic and conditional logistic regression models. Includes residual diagnostics and goodness of fit measures for model development and evaluation in matched case control studies.
 }
+\seealso{
+Useful links:
+\itemize{
+  \item \url{https://github.com/brendacontla/CLRtools}
+  \item Report bugs at \url{https://github.com/brendacontla/CLRtools/issues}
+}
+
+}
 \author{
-\strong{Maintainer}: Brenda Contla Hernández \email{brendacontla11@gmail.com}
+\strong{Maintainer}: Brenda Contla Hernández \email{B.Hernandez@massey.ac.nz}
+
+Authors:
+\itemize{
+  \item Brenda Contla Hernández \email{B.Hernandez@massey.ac.nz}
+}
 
 Other contributors:
 \itemize{

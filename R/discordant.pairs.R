@@ -34,7 +34,7 @@ discordant.pairs<-function(data, outcome, strata, variables=NULL){
   if (!all(outcome %in% names(data))) stop("Outcome is not in the dataset.")
   if (!all(strata %in% names(data))) stop("Strata is not in the dataset.")
 
-  n.strata<-unique(data[,strata])
+  n.strata<-unique(data[[strata]])
 
   ## Optional for the user to give the variables ro review either a vector or only a name.
   if(is.null(variables)){
